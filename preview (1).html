@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Movie Waves in the 21st Century — D3 Remake</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <style>
+    :root {
+      --paper: #faf9f5;
+      --ink: #424242;
+      --soft-ink: #777;
+      --grid: rgba(0,0,0,0.07);
+      --rule: rgba(0,0,0,0.22);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 10px 14px 22px;
+    }
+
+    #chart {
+      position: relative;
+      width: 100%;
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      overflow: visible;
+      background: var(--paper);
+    }
+
+    .title {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 48px;
+      font-weight: 800;
+      line-height: 0.92;
+      letter-spacing: -0.045em;
+      fill: #555;
+    }
+
+    .subtitle {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 28px;
+      font-weight: 700;
+      fill: #555;
+    }
+
+    .tiny {
+      font-size: 9px;
+      fill: #777;
+    }
+
+    .axis text {
+      fill: #777;
+      font-size: 9px;
+    }
+
+    .axis path,
+    .axis line {
+      stroke: rgba(0,0,0,0.16);
+    }
+
+    .grid line {
+      stroke: var(--grid);
+      stroke-width: 1;
+    }
+
+    .year-label {
+      font-size: 21px;
+      fill: #3f3f3f;
+      font-weight: 700;
+    }
+
+    .wave {
+      cursor: pointer;
+      transition: opacity 120ms ease, filter 120ms ease;
+    }
+
+    .wave.dimmed { opacity: 0.13 !important; }
+    .wave.active {
+      opacity: 1 !important;
+      filter: drop-shadow(0 2px 3px rgba(0,0,0,0.28));
+    }
+
+    .annotation text {
+      font-size: 7.6px;
+      line-height: 1.15;
+      fill: #303848;
+    }
+
+    .annotation .rank { font-weight: 800; fill: #194b97; }
+    .annotation .movie { font-weight: 700; }
+    .annotation .gross { fill: #777; }
+    .annotation line {
+      stroke: rgba(0,0,0,0.18);
+      stroke-width: 0.55;
+    }
+
+    .topbar text {
+      font-size: 9px;
+      fill: #444;
+    }
+
+    .topbar .heading {
+      font-weight: 800;
+      font-size: 11px;
+      fill: #364052;
+    }
+
+    .footer {
+      font-size: 9px;
+      fill: #777;
+      letter-spacing: 0.04em;
+    }
+
+    .footer-rule {
+      stroke: rgba(0,0,0,0.32);
+      stroke-width: 1;
+      stroke-dasharray: 2 3;
+    }
+
+    .tooltip {
+      position: absolute;
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -115%);
+      padding: 10px 12px;
+      max-width: 260px;
+      background: rgba(255,255,255,0.98);
+      border: 1px solid rgba(0,0,0,0.14);
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.16);
+      font-size: 12px;
+      line-height: 1.35;
+      color: #333;
+      transition: opacity 100ms ease;
+      z-index: 5;
+    }
+
+    .tooltip strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    @media (max-width: 720px) {
+      .page { padding: 6px 8px 18px; }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="page">
+    <div id="chart"></div>
+  </main>
+
+<script>
+/*
+  Movie Waves D3 Remake
+  ------------------------------------------------------------
+  This is a faithful D3 reconstruction of the Tableau-style poster:
+  - 2001–2020 rows
+  - stacked smooth movie waves
+  - opening-spike / long-tail waveform model
+  - title block embedded into upper rows
+  - top-10 inset bar chart
+  - lightweight labels and leader lines
+  - responsive SVG
+
+  Replace/extend MOVIE_SEEDS with your real Tableau export when available.
+*/
+
+const chart = d3.select("#chart");
+const tooltip = chart.append("div").attr("class", "tooltip");
+
+const palette = [
+  "#63bff0", "#f15a40", "#ffdf35", "#36d57a", "#ef47e7", "#2594d8",
+  "#22c7b8", "#f7953d", "#5b6ee1", "#81dd72", "#bd3d2a", "#24b1ff",
+  "#ff61c7", "#1ec8a5", "#ffc928", "#78c5ff", "#9d56d9", "#4ade80"
+];
+
+const topKnown = [
+  { title: "Star Wars: The Force Awakens", gross: 936.7, color: "#78c5ff" },
+  { title: "Avengers: Endgame", gross: 858.4, color: "#ef47e7" },
+  { title: "Avatar", gross: 760.5, color: "#5b6ee1" },
+  { title: "Black Panther", gross: 700.1, color: "#ffc928" },
+  { title: "Avengers: Infinity War", gross: 678.8, color: "#f15a40" },
+  { title: "Titanic", gross: 659.4, color: "#22c7b8" },
+  { title: "Jurassic World", gross: 652.3, color: "#36d57a" },
+  { title: "Marvel's The Avengers", gross: 623.4, color: "#2b96e2" },
+  { title: "Star Wars: The Last Jedi", gross: 620.2, color: "#ffc928" },
+  { title: "Incredibles 2", gross: 608.6, color: "#74c0fc" }
+];
+
+// Anchor titles, release week, and approximate domestic totals in millions.
+// These make the remake read like the original poster while synthetic
+// filler films create the dense wave texture.
+const ANCHORS = {
+  2001: [
+    ["Harry Potter and the Sorcerer's Stone", 46, 317.6, "Fantasy"],
+    ["The Lord of the Rings: Fellowship", 51, 315.5, "Fantasy"],
+    ["Shrek", 20, 267.7, "Animation"],
+    ["Monsters, Inc.", 44, 255.9, "Animation"],
+    ["Rush Hour 2", 31, 226.2, "Comedy"]
+  ],
+  2002: [
+    ["Spider-Man", 18, 403.7, "Action"],
+    ["The Lord of the Rings: Two Towers", 51, 339.8, "Fantasy"],
+    ["Star Wars: Attack of the Clones", 20, 310.7, "Sci-Fi"],
+    ["Harry Potter and the Chamber of Secrets", 46, 262.0, "Fantasy"],
+    ["Signs", 31, 227.9, "Thriller"]
+  ],
+  2003: [
+    ["The Lord of the Rings: Return of the King", 51, 377.0, "Fantasy"],
+    ["Finding Nemo", 22, 339.7, "Animation"],
+    ["Pirates of the Caribbean", 28, 305.4, "Adventure"],
+    ["The Matrix Reloaded", 20, 281.6, "Sci-Fi"],
+    ["Bruce Almighty", 21, 242.8, "Comedy"]
+  ],
+  2004: [
+    ["Shrek 2", 21, 441.2, "Animation"],
+    ["Spider-Man 2", 27, 373.6, "Action"],
+    ["The Passion of the Christ", 9, 370.8, "Drama"],
+    ["Meet the Fockers", 51, 279.3, "Comedy"],
+    ["The Incredibles", 45, 261.4, "Animation"]
+  ],
+  2005: [
+    ["Star Wars: Revenge of the Sith", 20, 380.3, "Sci-Fi"],
+    ["The Chronicles of Narnia", 49, 291.7, "Fantasy"],
+    ["Harry Potter and the Goblet of Fire", 46, 290.0, "Fantasy"],
+    ["War of the Worlds", 26, 234.3, "Sci-Fi"],
+    ["King Kong", 50, 218.1, "Adventure"]
+  ],
+  2006: [
+    ["Pirates of the Caribbean: Dead Man's Chest", 27, 423.3, "Adventure"],
+    ["Cars", 23, 244.1, "Animation"],
+    ["X-Men: The Last Stand", 21, 234.4, "Action"],
+    ["The Da Vinci Code", 20, 217.5, "Thriller"],
+    ["Night at the Museum", 51, 250.9, "Comedy"]
+  ],
+  2007: [
+    ["Spider-Man 3", 18, 336.5, "Action"],
+    ["Shrek the Third", 20, 322.7, "Animation"],
+    ["Transformers", 27, 319.2, "Action"],
+    ["Pirates: At World's End", 21, 309.4, "Adventure"],
+    ["I Am Legend", 50, 256.4, "Sci-Fi"]
+  ],
+  2008: [
+    ["The Dark Knight", 29, 533.3, "Action"],
+    ["Iron Man", 18, 318.4, "Action"],
+    ["Indiana Jones Crystal Skull", 21, 317.1, "Adventure"],
+    ["Hancock", 27, 227.9, "Action"],
+    ["WALL-E", 26, 223.8, "Animation"]
+  ],
+  2009: [
+    ["Avatar", 51, 760.5, "Sci-Fi"],
+    ["Transformers: Revenge of the Fallen", 26, 402.1, "Action"],
+    ["Harry Potter and the Half-Blood Prince", 29, 302.0, "Fantasy"],
+    ["Up", 22, 293.0, "Animation"],
+    ["The Hangover", 23, 277.3, "Comedy"]
+  ],
+  2010: [
+    ["Toy Story 3", 24, 415.0, "Animation"],
+    ["Alice in Wonderland", 10, 334.2, "Fantasy"],
+    ["Iron Man 2", 18, 312.4, "Action"],
+    ["The Twilight Saga: Eclipse", 26, 300.5, "Fantasy"],
+    ["Harry Potter Deathly Hallows Pt. 1", 46, 296.3, "Fantasy"]
+  ],
+  2011: [
+    ["Harry Potter Deathly Hallows Pt. 2", 28, 381.0, "Fantasy"],
+    ["Transformers: Dark of the Moon", 26, 352.4, "Action"],
+    ["The Twilight Saga: Breaking Dawn Pt. 1", 46, 281.3, "Fantasy"],
+    ["The Hangover Part II", 21, 254.5, "Comedy"],
+    ["Pirates: On Stranger Tides", 20, 241.1, "Adventure"]
+  ],
+  2012: [
+    ["Marvel's The Avengers", 18, 623.4, "Action"],
+    ["The Dark Knight Rises", 29, 448.1, "Action"],
+    ["The Hunger Games", 12, 408.0, "Action"],
+    ["Skyfall", 45, 304.4, "Action"],
+    ["The Hobbit", 50, 303.0, "Fantasy"]
+  ],
+  2013: [
+    ["Iron Man 3", 18, 409.0, "Action"],
+    ["The Hunger Games: Catching Fire", 47, 424.7, "Action"],
+    ["Despicable Me 2", 27, 368.1, "Animation"],
+    ["Man of Steel", 24, 291.0, "Action"],
+    ["Frozen", 48, 400.7, "Animation"]
+  ],
+  2014: [
+    ["Guardians of the Galaxy", 31, 333.2, "Action"],
+    ["The Hunger Games: Mockingjay Pt. 1", 47, 337.1, "Action"],
+    ["Captain America: Winter Soldier", 14, 259.8, "Action"],
+    ["The LEGO Movie", 6, 257.8, "Animation"],
+    ["Transformers: Age of Extinction", 26, 245.4, "Action"]
+  ],
+  2015: [
+    ["Star Wars: The Force Awakens", 51, 936.7, "Sci-Fi"],
+    ["Jurassic World", 24, 652.3, "Adventure"],
+    ["Avengers: Age of Ultron", 18, 459.0, "Action"],
+    ["Inside Out", 24, 356.5, "Animation"],
+    ["Furious 7", 14, 353.0, "Action"]
+  ],
+  2016: [
+    ["Finding Dory", 24, 486.3, "Animation"],
+    ["Rogue One: A Star Wars Story", 51, 532.2, "Sci-Fi"],
+    ["Captain America: Civil War", 18, 408.1, "Action"],
+    ["The Secret Life of Pets", 27, 368.4, "Animation"],
+    ["The Jungle Book", 15, 364.0, "Adventure"]
+  ],
+  2017: [
+    ["Star Wars: The Last Jedi", 50, 620.2, "Sci-Fi"],
+    ["Beauty and the Beast", 11, 504.0, "Musical"],
+    ["Wonder Woman", 22, 412.6, "Action"],
+    ["Jumanji: Welcome to the Jungle", 51, 404.5, "Adventure"],
+    ["Guardians Vol. 2", 18, 389.8, "Action"]
+  ],
+  2018: [
+    ["Black Panther", 7, 700.1, "Action"],
+    ["Avengers: Infinity War", 17, 678.8, "Action"],
+    ["Incredibles 2", 24, 608.6, "Animation"],
+    ["Jurassic World: Fallen Kingdom", 25, 417.7, "Adventure"],
+    ["Aquaman", 51, 335.1, "Action"]
+  ],
+  2019: [
+    ["Avengers: Endgame", 17, 858.4, "Action"],
+    ["The Lion King", 29, 543.6, "Animation"],
+    ["Toy Story 4", 25, 434.0, "Animation"],
+    ["Frozen II", 47, 477.4, "Animation"],
+    ["Star Wars: The Rise of Skywalker", 51, 515.2, "Sci-Fi"]
+  ],
+  2020: [
+    ["Bad Boys for Life", 3, 206.3, "Action"],
+    ["Sonic the Hedgehog", 7, 146.1, "Family"],
+    ["Birds of Prey", 6, 84.2, "Action"],
+    ["Dolittle", 3, 77.0, "Family"],
+    ["The Invisible Man", 9, 64.9, "Horror"]
+  ]
+};
+
+const genreColor = new Map([
+  ["Action", "#36a2eb"],
+  ["Adventure", "#ff7f50"],
+  ["Animation", "#5ee18d"],
+  ["Comedy", "#f9dc3d"],
+  ["Drama", "#8278e8"],
+  ["Family", "#73c6ff"],
+  ["Fantasy", "#e553d8"],
+  ["Horror", "#983a2e"],
+  ["Musical", "#2ec4b6"],
+  ["Sci-Fi", "#48b8e8"],
+  ["Thriller", "#ff9f1c"]
+]);
+
+function seeded(seed) {
+  let t = seed + 0x6D2B79F5;
+  return function() {
+    t += 0x6D2B79F5;
+    let r = Math.imul(t ^ t >>> 15, 1 | t);
+    r ^= r + Math.imul(r ^ r >>> 7, 61 | r);
+    return ((r ^ r >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function buildMovies() {
+  const movies = [];
+  const genrePool = ["Action","Animation","Comedy","Drama","Horror","Sci-Fi","Family","Thriller","Adventure","Fantasy"];
+
+  for (let year = 2001; year <= 2020; year++) {
+    const rng = seeded(year * 1009);
+
+    // Anchor films
+    ANCHORS[year].forEach((d, i) => {
+      const [title, releaseWeek, totalGross, genre] = d;
+      const frontLoaded = genre === "Action" || genre === "Sci-Fi" || genre === "Horror";
+      const openingRatio = frontLoaded ? 0.28 + rng() * 0.15 : 0.17 + rng() * 0.12;
+      movies.push({
+        id: `${year}-anchor-${i}`,
+        title,
+        year,
+        releaseWeek,
+        totalGross: totalGross * 1_000_000,
+        openingGross: totalGross * 1_000_000 * openingRatio,
+        genre,
+        color: genreColor.get(genre) || palette[i % palette.length],
+        isAnchor: true,
+        rank: i + 1
+      });
+    });
+
+    // Synthetic dense release texture.
+    const centers = [2,5,8,12,15,18,21,24,27,30,33,36,40,44,47,50];
+    centers.forEach((center, ci) => {
+      const count = (center >= 20 && center <= 31) || center >= 46 ? 4 : 3;
+      for (let j = 0; j < count; j++) {
+        const genre = genrePool[Math.floor(rng() * genrePool.length)];
+        const total = (18 + Math.pow(rng(), 1.7) * 145) * 1_000_000;
+        const releaseWeek = Math.max(0, Math.min(51, Math.round(center + (rng() - 0.5) * 3)));
+        const frontLoaded = genre === "Action" || genre === "Sci-Fi" || genre === "Horror";
+        const openingRatio = frontLoaded ? 0.27 + rng() * 0.20 : 0.12 + rng() * 0.18;
+
+        movies.push({
+          id: `${year}-fill-${ci}-${j}`,
+          title: `${genre} Release ${year}-${ci + 1}.${j + 1}`,
+          year,
+          releaseWeek,
+          totalGross: total,
+          openingGross: total * openingRatio,
+          genre,
+          color: palette[(ci + j + year) % palette.length],
+          isAnchor: false
+        });
+      }
+    });
+  }
+
+  // Tune wave parameters after movie creation.
+  movies.forEach(m => {
+    const ratio = m.openingGross / m.totalGross;
+    const isLeggy = ratio < 0.18;
+    m.riseRate = isLeggy ? 2.0 : 3.2 + ratio * 4.0;
+    m.decayRate = isLeggy ? 0.13 + ratio * 0.30 : 0.19 + ratio * 0.72;
+  });
+
+  return movies;
+}
+
+const movies = buildMovies();
+const weeks = d3.range(0, 53);
+
+function rawWave(week, m) {
+  const dt = week - m.releaseWeek;
+  if (dt < 0) return 0;
+  // Small epsilon gives visible opening-week impulse.
+  const rise = 0.2 + 0.8 * (1 - Math.exp(-m.riseRate * Math.max(dt, 0.05)));
+  const decay = Math.exp(-m.decayRate * dt);
+  return m.openingGross * rise * decay;
+}
+
+function computeScaleFactors() {
+  movies.forEach(m => {
+    const rawArea = d3.sum(weeks, w => rawWave(w, m));
+    m.scaleFactor = rawArea > 0 ? m.totalGross / rawArea : 1;
+  });
+}
+
+function movieWave(week, m) {
+  return rawWave(week, m) * m.scaleFactor;
+}
+
+computeScaleFactors();
+
+function formatGross(v) {
+  return d3.format("$.3s")(v).replace("G", "B");
+}
+
+function render() {
+  chart.selectAll("svg").remove();
+
+  const width = chart.node().clientWidth;
+  const posterWidth = width;
+  const isSmall = width < 720;
+
+  const margin = {
+    top: isSmall ? 24 : 30,
+    right: isSmall ? 16 : 34,
+    bottom: isSmall ? 74 : 112,
+    left: isSmall ? 74 : 112
+  };
+
+  const years = d3.range(2020, 2000, -1);
+  const rowHeight = isSmall ? 84 : 110;
+
+  // Dedicated header band keeps the title, top-10 bars, and example wave
+  // completely separate from the yearly waveform rows.
+  const headerHeight = isSmall ? 170 : 300;
+  const rowGap = isSmall ? 10 : 14;
+
+  const innerWidth = posterWidth - margin.left - margin.right;
+  const innerHeight = years.length * rowHeight;
+  const height = margin.top + headerHeight + rowGap + innerHeight + margin.bottom;
+
+  const svg = chart.append("svg")
+    .attr("viewBox", [0, 0, posterWidth, height])
+    .attr("role", "img")
+    .attr("aria-label", "Movie Waves in the 21st Century, domestic box office waveform remake");
+
+  const root = svg.append("g").attr("transform", `translate(${margin.left},${margin.top + headerHeight + rowGap})`);
+
+  const x = d3.scaleLinear().domain([0, 52]).range([0, innerWidth]);
+
+  const xAxis = d3.axisBottom(x)
+    .tickValues(d3.range(0, 53, 4))
+    .tickFormat((d, i) => i === 0 ? "Week" : "");
+
+  // Large title block placed in the same visual spirit as the poster.
+  if (!isSmall) {
+    const titleX = posterWidth * 0.53;
+    svg.append("text")
+      .attr("class", "title")
+      .attr("x", titleX)
+      .attr("y", margin.top + 38)
+      .attr("text-anchor", "middle")
+      .selectAll("tspan")
+      .data(["Movie Waves", "in 21st Century"])
+      .join("tspan")
+      .attr("x", titleX)
+      .attr("dy", (d, i) => i ? 52 : 0)
+      .text(d => d);
+
+    svg.append("text")
+      .attr("class", "subtitle")
+      .attr("x", titleX)
+      .attr("y", margin.top + 140)
+      .attr("text-anchor", "middle")
+      .text("Domestic Box Office");
+
+    svg.append("text")
+      .attr("class", "tiny")
+      .attr("x", titleX)
+      .attr("y", margin.top + 174)
+      .attr("text-anchor", "middle")
+      .text("");
+  } else {
+    svg.append("text")
+      .attr("class", "title")
+      .attr("x", margin.left)
+      .attr("y", margin.top + 36)
+      .style("font-size", "34px")
+      .text("Movie Waves");
+  }
+
+  // Top 10 bar chart inset.
+  if (!isSmall) {
+    drawHeaderSampleWave(svg, margin.left + 12, margin.top + 70, 290, 110);
+    drawTopBars(svg, posterWidth - 330, margin.top + 54, 296, 150);
+  }
+
+  const rows = root.selectAll(".row")
+    .data(years)
+    .join("g")
+    .attr("class", "row")
+    .attr("transform", (year, i) => `translate(0,${i * rowHeight})`);
+
+  rows.each(function(year, rowIndex) {
+    const g = d3.select(this);
+    const yearMovies = movies
+      .filter(d => d.year === year)
+      .sort((a, b) => d3.ascending(a.releaseWeek, b.releaseWeek) || d3.ascending(a.totalGross, b.totalGross));
+
+    const keys = yearMovies.map(d => d.id);
+    const movieById = new Map(yearMovies.map(d => [d.id, d]));
+
+    const data = weeks.map(week => {
+      const row = { week };
+      yearMovies.forEach(m => row[m.id] = movieWave(week, m));
+      return row;
+    });
+
+    const series = d3.stack().keys(keys)(data);
+    const maxY = d3.max(series, layer => d3.max(layer, d => d[1])) || 1;
+
+    const y = d3.scaleLinear()
+      .domain([0, maxY * 1.13])
+      .range([rowHeight - 22, 0]);
+
+    const area = d3.area()
+      .x(d => x(d.data.week))
+      .y0(d => y(d[0]))
+      .y1(d => y(d[1]))
+      .curve(d3.curveBasis);
+
+    // Grid
+    g.append("g")
+      .attr("class", "grid")
+      .selectAll("line")
+      .data(d3.range(0, 53, 4))
+      .join("line")
+      .attr("x1", d => x(d))
+      .attr("x2", d => x(d))
+      .attr("y1", -2)
+      .attr("y2", rowHeight - 22);
+
+    // Row separators / baseline
+    g.append("line")
+      .attr("x1", 0)
+      .attr("x2", innerWidth)
+      .attr("y1", rowHeight - 22)
+      .attr("y2", rowHeight - 22)
+      .attr("stroke", "rgba(0,0,0,0.25)")
+      .attr("stroke-width", 0.8);
+
+    g.append("text")
+      .attr("class", "year-label")
+      .attr("x", -54)
+      .attr("y", rowHeight / 2)
+      .attr("text-anchor", "end")
+      .attr("dominant-baseline", "middle")
+      .text(year);
+
+    // Y-axis mini labels
+    if (!isSmall) {
+      const yTicks = y.ticks(3).filter(d => d > 0);
+      g.selectAll(".ytick")
+        .data(yTicks)
+        .join("text")
+        .attr("class", "axis")
+        .attr("x", -10)
+        .attr("y", d => y(d))
+        .attr("text-anchor", "end")
+        .attr("dominant-baseline", "middle")
+        .style("font-size", "7.5px")
+        .style("fill", "#777")
+        .text(d => "$" + Math.round(d / 1_000_000) + "M");
+    }
+
+    // Waves
+    g.append("g")
+      .selectAll("path")
+      .data(series)
+      .join("path")
+      .attr("class", "wave")
+      .attr("d", area)
+      .attr("fill", d => movieById.get(d.key).color)
+      .attr("opacity", 0.92)
+      .on("mouseenter", function(event, d) {
+        const m = movieById.get(d.key);
+        svg.selectAll(".wave").classed("dimmed", true).classed("active", false);
+        d3.select(this).classed("dimmed", false).classed("active", true).raise();
+
+        tooltip.style("opacity", 1).html(`
+          <strong>${m.title}</strong>
+          ${m.year} • week ${m.releaseWeek}<br/>
+          Genre: ${m.genre}<br/>
+          Opening estimate: ${formatGross(m.openingGross)}<br/>
+          Domestic total: ${formatGross(m.totalGross)}
+        `);
+      })
+      .on("mousemove", function(event) {
+        const [mx, my] = d3.pointer(event, chart.node());
+        tooltip.style("left", mx + "px").style("top", my + "px");
+      })
+      .on("mouseleave", function() {
+        svg.selectAll(".wave").classed("dimmed", false).classed("active", false);
+        tooltip.style("opacity", 0);
+      });
+
+    // Annotations: top 5 anchor movies for each year.
+    if (!isSmall) {
+      const anchors = yearMovies
+        .filter(d => d.isAnchor)
+        .sort((a,b) => d3.descending(a.totalGross, b.totalGross))
+        .slice(0, year === 2020 ? 4 : 5);
+
+      const placed = [];
+      const labelW = 112;
+      const labelH = 22;
+
+      anchors.forEach((m, i) => {
+        const peakWeek = findPeakWeek(m);
+        const stackLayer = series.find(s => s.key === m.id);
+        const point = stackLayer.find(p => p.data.week === peakWeek);
+        const px = x(peakWeek);
+        const py = point ? y(point[1]) : y(movieWave(peakWeek, m));
+
+        const candidates = [
+          { x: px - 46, y: py - 38 },
+          { x: px + 14, y: py - 38 },
+          { x: px - 86, y: py - 26 },
+          { x: px + 34, y: py - 26 },
+          { x: px - 46, y: py - 54 },
+          { x: px + 14, y: py - 54 },
+          { x: px - 86, y: py - 12 },
+          { x: px + 34, y: py - 12 }
+        ].map(c => ({
+          x: Math.max(0, Math.min(innerWidth - labelW, c.x)),
+          y: Math.max(4, Math.min(rowHeight - 48, c.y))
+        }));
+
+        let chosen = null;
+        for (const c of candidates) {
+          const overlaps = placed.some(p =>
+            c.x < p.x + labelW + 10 &&
+            c.x + labelW + 10 > p.x &&
+            c.y < p.y + labelH + 8 &&
+            c.y + labelH + 8 > p.y
+          );
+          if (!overlaps) {
+            chosen = c;
+            break;
+          }
+        }
+
+        // Skip, rather than clutter, if there is no clean label position.
+        if (!chosen) return;
+        placed.push(chosen);
+
+        const a = g.append("g").attr("class", "annotation");
+        a.append("line")
+          .attr("x1", px)
+          .attr("y1", py + 3)
+          .attr("x2", chosen.x + 28)
+          .attr("y2", chosen.y + 13);
+
+        const text = a.append("text")
+          .attr("x", chosen.x)
+          .attr("y", chosen.y);
+
+        text.append("tspan")
+          .attr("class", "rank")
+          .text("#" + m.rank + " ");
+
+        text.append("tspan")
+          .attr("class", "movie")
+          .attr("fill", m.color)
+          .text(truncate(m.title, 22));
+
+        text.append("tspan")
+          .attr("class", "gross")
+          .attr("x", chosen.x)
+          .attr("dy", 9)
+          .text(formatGross(m.totalGross));
+      });
+    }
+
+    // Axis shown under top row and bottom row like the original.
+    if (rowIndex === 0 || rowIndex === years.length - 1) {
+      g.append("g")
+        .attr("class", "axis")
+        .attr("transform", `translate(0,${rowHeight - 12})`)
+        .call(xAxis)
+        .call(s => s.select(".domain").remove());
+    }
+  });
+
+  // Footer — deliberately separated from the main visualization.
+  const footerY = height - margin.bottom + 38;
+  svg.append("line")
+    .attr("class", "footer-rule")
+    .attr("x1", margin.left - 40)
+    .attr("x2", posterWidth - margin.right)
+    .attr("y1", footerY - 26)
+    .attr("y2", footerY - 26);
+
+  svg.append("text")
+    .attr("class", "footer")
+    .attr("x", margin.left - 40)
+    .attr("y", footerY)
+    .text("Source:");
+
+  svg.append("text")
+    .attr("class", "footer")
+    .attr("x", margin.left - 40)
+    .attr("y", footerY + 16)
+    .text("Box Office Mojo");
+
+  svg.append("line")
+    .attr("x1", margin.left + 90)
+    .attr("x2", margin.left + 90)
+    .attr("y1", footerY - 4)
+    .attr("y2", footerY + 22)
+    .attr("stroke", "rgba(0,0,0,0.18)");
+
+  svg.append("text")
+    .attr("class", "footer")
+    .attr("x", margin.left + 120)
+    .attr("y", footerY)
+    .text("Note:");
+
+  svg.append("text")
+    .attr("class", "footer")
+    .attr("x", margin.left + 120)
+    .attr("y", footerY + 16)
+    .text("Grosses in USD");
+
+  svg.append("text")
+    .attr("class", "footer")
+    .attr("x", posterWidth * 0.50)
+    .attr("y", footerY + 8)
+    .attr("text-anchor", "middle")
+    .text("Interactive D3 remake of the original Tableau visualization");
+
+  svg.append("text")
+    .attr("class", "footer")
+    .attr("x", posterWidth - margin.right)
+    .attr("y", footerY + 8)
+    .attr("text-anchor", "end")
+    .text("Built with D3.js");
+
+  function findPeakWeek(m) {
+    let best = m.releaseWeek, bestVal = -Infinity;
+    weeks.forEach(w => {
+      const val = movieWave(w, m);
+      if (val > bestVal) { best = w; bestVal = val; }
+    });
+    return best;
+  }
+}
+
+
+function drawHeaderSampleWave(svg, x0, y0, width, height) {
+  const g = svg.append("g").attr("transform", `translate(${x0},${y0})`);
+  const headerMovies = [
+    { title: "Black Panther", releaseWeek: 4, totalGross: 700_000_000, openingGross: 190_000_000, color: "#73c6ff", riseRate: 4.0, decayRate: 0.42 },
+    { title: "Spider-Man: No Way Home", releaseWeek: 6, totalGross: 805_000_000, openingGross: 260_000_000, color: "#ef47e7", riseRate: 4.4, decayRate: 0.45 },
+    { title: "Avengers: Endgame", releaseWeek: 7, totalGross: 858_000_000, openingGross: 305_000_000, color: "#ff9f1c", riseRate: 4.5, decayRate: 0.46 },
+    { title: "Star Wars: The Force Awakens", releaseWeek: 10, totalGross: 937_000_000, openingGross: 248_000_000, color: "#5ee18d", riseRate: 3.7, decayRate: 0.36 }
+  ];
+
+  const localWeeks = d3.range(0, 16);
+  headerMovies.forEach(m => {
+    const area = d3.sum(localWeeks, w => {
+      const dt = w - m.releaseWeek;
+      if (dt < 0) return 0;
+      return m.openingGross * (0.2 + 0.8 * (1 - Math.exp(-m.riseRate * Math.max(dt, 0.05)))) * Math.exp(-m.decayRate * dt);
+    });
+    m.scaleFactor = area > 0 ? m.totalGross / area : 1;
+  });
+
+  const data = localWeeks.map(week => {
+    const row = { week };
+    headerMovies.forEach((m, i) => {
+      const dt = week - m.releaseWeek;
+      row["m" + i] = dt < 0 ? 0 : m.scaleFactor * m.openingGross * (0.2 + 0.8 * (1 - Math.exp(-m.riseRate * Math.max(dt, 0.05)))) * Math.exp(-m.decayRate * dt);
+    });
+    return row;
+  });
+
+  const stack = d3.stack().keys(headerMovies.map((_, i) => "m" + i))(data);
+  const x = d3.scaleLinear().domain([0, 15]).range([0, width]);
+  const y = d3.scaleLinear()
+    .domain([0, d3.max(stack, s => d3.max(s, d => d[1])) * 1.2])
+    .range([height, 0]);
+
+  g.append("line").attr("x1", 0).attr("x2", width).attr("y1", height).attr("y2", height).attr("stroke", "rgba(0,0,0,0.16)");
+
+  g.selectAll("path")
+    .data(stack)
+    .join("path")
+    .attr("d", d3.area()
+      .x(d => x(d.data.week))
+      .y0(d => y(d[0]))
+      .y1(d => y(d[1]))
+      .curve(d3.curveBasis))
+    .attr("fill", (d, i) => headerMovies[i].color)
+    .attr("opacity", 0.28);
+
+  g.selectAll(".h-label")
+    .data(headerMovies)
+    .join("text")
+    .attr("class", "tiny")
+    .attr("x", d => x(d.releaseWeek))
+    .attr("y", (d, i) => 6 + i * 14)
+    .style("font-weight", 700)
+    .style("fill", d => d.color)
+    .text((d, i) => `#${i + 1} ${truncate(d.title, 22)}`);
+}
+
+function drawTopBars(svg, x0, y0, width, height) {
+  const g = svg.append("g").attr("class", "topbar").attr("transform", `translate(${x0},${y0})`);
+  g.append("text").attr("class", "heading").attr("x", 0).attr("y", 0).text("Top 10 films by Total Gross");
+
+  const x = d3.scaleLinear().domain([0, d3.max(topKnown, d => d.gross)]).range([0, width - 110]);
+  const y = d3.scaleBand().domain(topKnown.map(d => d.title)).range([14, height]).padding(0.28);
+
+  g.selectAll("rect")
+    .data(topKnown)
+    .join("rect")
+    .attr("x", 105)
+    .attr("y", d => y(d.title))
+    .attr("height", y.bandwidth())
+    .attr("width", d => x(d.gross))
+    .attr("fill", d => d.color)
+    .attr("opacity", 0.9);
+
+  g.selectAll(".name")
+    .data(topKnown)
+    .join("text")
+    .attr("x", 102)
+    .attr("y", d => y(d.title) + y.bandwidth() / 2)
+    .attr("text-anchor", "end")
+    .attr("dominant-baseline", "middle")
+    .text(d => truncate(d.title, 24));
+
+  g.selectAll(".value")
+    .data(topKnown)
+    .join("text")
+    .attr("x", d => 108 + x(d.gross))
+    .attr("y", d => y(d.title) + y.bandwidth() / 2)
+    .attr("dominant-baseline", "middle")
+    .style("font-size", "7.5px")
+    .style("fill", "#555")
+    .text(d => "$" + d.gross.toFixed(1) + "M");
+}
+
+function truncate(str, n) {
+  return str.length > n ? str.slice(0, n - 1) + "…" : str;
+}
+
+render();
+new ResizeObserver(render).observe(chart.node());
+</script>
+</body>
+</html>
